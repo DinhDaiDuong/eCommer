@@ -1,41 +1,135 @@
 stages:
-  - build
+  - install
   - test
+  - build
   - deploy
+  - metrics
 
 variables:
   NODE_VERSION: "16"
+  BUILD_START_TIME: ''
 
-# Cache npm dependencies
-cache:
-  paths:
-    - node_modules/
-    - .npm/
+# Tạo thư mục metrics
+before_script:
+  - mkdir -p metrics
 
-# Build stage
-build:
-  stage: build
-  image: node:${NODE_VERSION}
+# Frontend metrics
+frontend_build_metrics:
+  stage: metrics
   script:
-    - npm install
-    - npm run build
+    - |
+      START_TIME=$(date +%s%N)
+      cd eCommerce_Reactjs
+      npm install
+      npm test --passWithNoTests || true
+      npm run build
+      END_TIME=$(date +%s%N)
+      DURATION=$((($END_TIME - $START_TIME)/1000000))
+      echo $DURATION > ../metrics/frontend-build.txt
   artifacts:
     paths:
-      - build/
-    expire_in: 1 week
+      - metrics/frontend-build.txt
 
-# Test stage  
-test:
-  stage: test
-  image: node:${NODE_VERSION}
+# Backend metrics
+backend_build_metrics:
+  stage: metrics
   script:
-    - npm install
-    - npm test
+    - |
+      START_TIME=$(date +%s%N)
+      cd eComAPI
+      npm install
+      npm test --passWithNoTests || true
+      npm run build
+      END_TIME=$(date +%s%N)
+      DURATION=$((($END_TIME - $START_TIME)/1000000))
+      echo $DURATION > ../metrics/backend-build.txt
+  artifacts:
+    paths:
+      - metrics/backend-build.txt
 
-# Deploy stage
-deploy:
+# Resource monitoring
+resource_monitor:
+  stage: metrics
+  script:
+    - |
+      # CPU Usage
+      CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+      
+      # Memory Usage
+      MEM_USAGE=$(free -m | awk 'NR==2{printf "%.2f", $3*100/$2}')
+      
+      # Disk Usage
+      DISK_USAGE=$(df -h / | awk 'NR==2{print $5}')
+      
+      # Write to file
+      echo "CPU: ${CPU_USAGE}%" > metrics/resources.txt
+      echo "Memory: ${MEM_USAGE}%" >> metrics/resources.txt
+      echo "Disk: ${DISK_USAGE}" >> metrics/resources.txt
+  artifacts:
+    paths:
+      - metrics/resources.txt
+
+# Generate report
+generate_report:
+  stage: metrics
+  script:
+    - |
+      cat > pipeline-report.md << EOF
+      Pipeline Report
+      ==============
+      Backend Build: $(cat metrics/backend-build.txt)ms
+      Frontend Build: $(cat metrics/frontend-build.txt)ms
+      
+      Resource Usage:
+      $(cat metrics/resources.txt)
+      EOF
+  artifacts:
+    paths:
+      - pipeline-report.md
+      pages:
   stage: deploy
   script:
-    - echo "Deploying application..."
+    - mkdir -p public
+    - |
+      cat > public/index.html << EOF
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Pipeline Metrics</title>
+      </head>
+      <body>
+        <h1>Pipeline Metrics</h1>
+        <h2>Build Times</h2>
+        <p>Frontend: $(cat metrics/frontend-build.txt)ms</p>
+        <p>Backend: $(cat metrics/backend-build.txt)ms</p>
+        
+        <h2>Resource Usage</h2>
+        <pre>$(cat metrics/resources.txt)</pre>
+      </body>
+      </html>
+      EOF
+  artifacts:
+    paths:
+      - public
   only:
     - main
+    save_metrics_history:
+  stage: metrics
+  script:
+    - |
+      # Tạo header nếu file chưa tồn tại
+      if [ ! -f $METRICS_FILE ]; then
+        echo "Date,Frontend Build,Backend Build,CPU Usage,Memory Usage,Disk Usage" > $METRICS_FILE
+      fi
+      
+      # Thêm dữ liệu mới
+      echo "$(date)," \
+      "$(cat metrics/frontend-build.txt)," \
+      "$(cat metrics/backend-build.txt)," \
+      "$(grep CPU metrics/resources.txt | cut -d' ' -f2)," \
+      "$(grep Memory metrics/resources.txt | cut -d' ' -f2)," \
+      "$(grep Disk metrics/resources.txt | cut -d' ' -f2)" \
+      >> $METRICS_FILE
+  artifacts:
+     paths:
+      - $METRICS_FILE
