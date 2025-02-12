@@ -1,0 +1,41 @@
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  NODE_VERSION: "16"
+
+# Cache npm dependencies
+cache:
+  paths:
+    - node_modules/
+    - .npm/
+
+# Build stage
+build:
+  stage: build
+  image: node:${NODE_VERSION}
+  script:
+    - npm install
+    - npm run build
+  artifacts:
+    paths:
+      - build/
+    expire_in: 1 week
+
+# Test stage  
+test:
+  stage: test
+  image: node:${NODE_VERSION}
+  script:
+    - npm install
+    - npm test
+
+# Deploy stage
+deploy:
+  stage: deploy
+  script:
+    - echo "Deploying application..."
+  only:
+    - main
